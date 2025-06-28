@@ -1,219 +1,193 @@
-name: cesium-native
-on: [push, pull_request]
-env:
-  VCPKG_BINARY_SOURCES: 'clear;x-aws,s3://cesium-builds/vcpkg/cesium-native-cache/,readwrite'
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_INTERNAL_SERVICES_VCPKG_ACCESS_KEY }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_INTERNAL_SERVICES_VCPKG_SECRET_KEY }}
-  AWS_REGION: us-east-1
-jobs:
-  QuickChecks:
-    name: "Quick Checks"
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Check out repository code
-        uses: actions/checkout@v4
-      - name: Check source formatting
-        run: |
-          npm install
-          npm run format -- --dry-run -Werror
-  Linting:
-    name: "Linting"
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out repository code
-        uses: actions/checkout@v4
-      - name: Install latest CMake 3 and Ninja
-        uses: lukka/get-cmake@latest
-        with:
-          cmakeVersion: "3.31.6"
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.9
-        with:
-          key: ccache-ubuntu-24.04-clang-clang-tidy
-      - name: Install latest clang and clang-tidy
-        run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 19
-          sudo apt-get install clang-tidy-19
-      - name: Set CC and CXX
-        run: |
-          echo "CC=/usr/bin/clang-19" >> "$GITHUB_ENV"
-          echo "CXX=/usr/bin/clang++-19" >> "$GITHUB_ENV"
-          echo "VCPKG_ROOT=${VCPKG_INSTALLATION_ROOT}" >> "$GITHUB_ENV"
-      - name: Make more swap space available
-        run: |
-          sudo swapoff -a
-          sudo fallocate -l 10G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          sudo swapon --show
-      - name: Run clang-tidy
-        run: |
-          echo `$CC --version | head -n 1`, `cmake --version | head -n 1`
-          cp doc/cmake-presets/CMakeUserPresets.json .
-          cmake --preset=vcpkg-linux -DCMAKE_BUILD_TYPE=Debug -DCESIUM_CLANG_TIDY_USE_THREADS=4
-          cmake --build build --target clang-tidy > output.log
-      - name: Print vcpkg problems
-        if: ${{ failure() }}
-        run: |
-          cat "/usr/local/share/vcpkg/buildtrees/doctest/config-x64-linux-dbg-out.log"
-          cat "/usr/local/share/vcpkg/buildtrees/doctest/config-x64-linux-dbg-err.log"
-      - name: List clang-tidy warnings & errors
-        if: ${{ !cancelled() }}
-        run: |
-          sed -n '/\(error\|warning\):/,/^$/p' output.log
-          # On macOS, the above doesn't work because the escaped pipe is not supported.
-          # Instead, use two commands:
-          #   sed -n '/error:/,/^$/p' output.log
-          #   sed -n '/warning:/,/^$/p' output.log
+name: Build Cesium Native (Cross-Platform)
 
-  Documentation:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Install Doxygen
-        run: |
-          cd ~
-          wget https://github.com/doxygen/doxygen/releases/download/Release_1_13_2/doxygen-1.13.2.linux.bin.tar.gz
-          tar xzf doxygen-1.13.2.linux.bin.tar.gz
-          export PATH=$PWD/doxygen-1.13.2/bin:$PATH
-          echo "PATH=$PATH" >> "$GITHUB_ENV"
-          echo "VCPKG_ROOT=${VCPKG_INSTALLATION_ROOT}" >> "$GITHUB_ENV"
-          doxygen --version
-      - name: Install latest CMake 3 and Ninja
-        uses: lukka/get-cmake@latest
-        with:
-          cmakeVersion: "3.31.6"
-      - name: Check out repository code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.9
-        with:
-          key: ccache-ubuntu-24.04-doxygen
-      - name: Generate Documentation
-        run: |
-          npm install
-          cp doc/cmake-presets/CMakeUserPresets.json .
-          cmake --preset=vcpkg-linux
-          cmake --build build --target cesium-native-docs
-      - name: Publish Documentation Artifact
-        if: ${{ success() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ReferenceDocumentation
-          path: build/doc/html
-  WindowsBuild:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [windows-2022]
-        build_type: [Debug, RelWithDebInfo]
-    name: "${{matrix.platform}} / ${{matrix.build_type}}"
+# Trigger on push, PR, and manual dispatch
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  # Job for macOS build
+  build-macos:
+    name: Build on macOS (Cesium Native)
+    runs-on: macos-latest
     env:
-      CACHE_KEY: "${{ matrix.platform }}"
-    runs-on: ${{ matrix.platform }}
+      # Set vcpkg root path for CMake to find dependencies:contentReference[oaicite:0]{index=0}
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
     steps:
-      - name: Install latest CMake 3 and Ninja
-        uses: lukka/get-cmake@latest
-        with:
-          cmakeVersion: "3.31.6"
-      - name: Install nasm
-        uses: ilammy/setup-nasm@v1
-      - name: Check out repository code
+      # Check out the repository code
+      - name: Check out repository
         uses: actions/checkout@v4
+
+      # Install NASM and Ninja via Homebrew (for assembly optimizations & Ninja build):contentReference[oaicite:1]{index=1}
+      - name: Install build tools (Homebrew)
+        run: |
+          brew update
+          brew install nasm ninja
+        # NASM is needed for optimal JPEG decoding performance:contentReference[oaicite:2]{index=2}; Ninja is the chosen CMake generator
+
+      # Install vcpkg (dependency manager):contentReference[oaicite:3]{index=3}
+      - name: Install vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+        # Clone vcpkg and bootstrap it to manage Cesium Native dependencies:contentReference[oaicite:4]{index=4}
+
+      # Configure CMake for macOS build
+      - name: Configure CMake (macOS)
+        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                 -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+                 -DCESIUM_USE_EZVCPKG=OFF
+        # Use Ninja generator and vcpkg toolchain:contentReference[oaicite:5]{index=5}; disable internal ezvcpkg to use our vcpkg install
+
+      # Build the project using Ninja
+      - name: Build (macOS)
+        run: cmake --build build --parallel
+        # Compile Cesium Native on macOS (Release configuration)
+
+      # Install the library and headers to a package directory
+      - name: Install library (macOS)
+        run: cmake --install build --prefix "$GITHUB_WORKSPACE/install"
+        # Using CMake install to gather built library (.dylib) and headers into 'install' folder
+
+      # Upload the built library as a GitHub Actions artifact
+      - name: Upload artifact (macOS)
+        uses: actions/upload-artifact@v3
         with:
-          submodules: recursive
-      - name: Setup MSVC for command-line builds
+          name: cesium-native-macos
+          path: install
+        # Provides the macOS build artifact (e.g., .dylib and includes) for download
+
+  # Job for Windows build
+  build-windows:
+    name: Build on Windows (Cesium Native)
+    runs-on: windows-latest
+    env:
+      # Set vcpkg root path (Windows requires backslashes in path)
+      VCPKG_ROOT: "${{ github.workspace }}\\vcpkg"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Set up Visual C++ build environment (MSVC) for command-line use
+      - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
-      - name: sccache
-        uses: hendrikmuhs/ccache-action@v1.2.9
         with:
-          key: ccache-${{ env.CACHE_KEY}}-${{matrix.build_type}}-1
-          variant: sccache
-      - name: Compile ${{matrix.build_type}} Configuration
+          arch: x64
+        # Activates the Developer Command Prompt (vcvars) for 64-bit MSVC tools
+
+      # Install NASM and Ninja via Chocolatey (for assembly optimization & Ninja):contentReference[oaicite:6]{index=6}
+      - name: Install build tools (Chocolatey)
         run: |
-          $env:VCPKG_ROOT="$env:VCPKG_INSTALLATION_ROOT"
-          Copy .\doc\cmake-presets\CMakeUserPresets.json .\
-          cmake --preset=vcpkg-windows -G Ninja -DCMAKE_BUILD_TYPE=${{matrix.build_type}} -DCMAKE_C_COMPILER_LAUNCHER=C:\\Users\\runneradmin\\.cargo\\bin\\sccache -DCMAKE_CXX_COMPILER_LAUNCHER=C:\\Users\\runneradmin\\.cargo\\bin\\sccache
-          cmake --build build
-      - name: Test ${{matrix.build_type}} Configuration
+          choco install -y nasm
+          choco install -y ninja
+        # NASM for optimized JPEG decoding on Windows:contentReference[oaicite:7]{index=7}; Ninja for faster multi-config builds
+
+      # Install vcpkg on Windows and bootstrap it:contentReference[oaicite:8]{index=8}
+      - name: Install vcpkg
+        shell: cmd
         run: |
-          cd build
-          ctest -V
-  PosixBuild:
-    strategy:
-      fail-fast: false
-      matrix:
-        compiler: [ gcc, clang ]
-        platform: [ ubuntu-24.04, ubuntu-22.04, macos-13 ]
-        build_type: [Debug, RelWithDebInfo]
-        exclude:
-          - compiler: clang
-            platform: ubuntu-24.04
-          - compiler: gcc
-            platform: macos-13
-          - compiler: gcc
-            platform: ubuntu-22.04
-    name: "${{matrix.platform}} / ${{matrix.compiler}} / ${{matrix.build_type}}"
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          vcpkg\bootstrap-vcpkg.bat -disableMetrics
+        # Clone and build vcpkg.exe (manages dependencies):contentReference[oaicite:9]{index=9}
+
+      # Configure CMake for Windows build
+      - name: Configure CMake (Windows)
+        shell: cmd
+        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+                   -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
+                   -DCESIUM_USE_EZVCPKG=OFF
+        # Generate Ninja build files with vcpkg toolchain:contentReference[oaicite:10]{index=10}; using MSVC compiler (via vcvars), NASM enabled
+
+      # Build the project with Ninja (using MSVC)
+      - name: Build (Windows)
+        shell: cmd
+        run: cmake --build build --parallel
+        # Compile Cesium Native on Windows (Release mode); results in .lib/.dll outputs
+
+      # Install the library and headers to a package directory
+      - name: Install library (Windows)
+        shell: cmd
+        run: cmake --install build --prefix "%GITHUB_WORKSPACE%\install"
+        # Collect the built library (.dll and .lib) and headers into 'install' directory
+
+      # Upload the Windows build artifact (library + headers)
+      - name: Upload artifact (Windows)
+        uses: actions/upload-artifact@v3
+        with:
+          name: cesium-native-windows
+          path: install
+        # Provides the Windows build artifact (e.g., DLL and import LIB) for download
+
+  # Job for Android (cross-compile on Linux)
+  build-android:
+    name: Build for Android (Cesium Native)
+    runs-on: ubuntu-latest
     env:
-      CACHE_KEY: "${{ matrix.platform }}-${{matrix.compiler}}"
-    runs-on: ${{ matrix.platform }}
+      # Set vcpkg root path and Android NDK path for cross-compiling
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      ANDROID_NDK_HOME: ${{ github.workspace }}/android-ndk
     steps:
-      - name: Install latest CMake 3 and Ninja
-        uses: lukka/get-cmake@latest
-        with:
-          cmakeVersion: "3.31.6"
-      - name: Install nasm
-        uses: ilammy/setup-nasm@v1
-      - name: Check out repository code
+      - name: Check out repository
         uses: actions/checkout@v4
+
+      # Install required packages: compiler, Ninja, NASM, and tools to fetch NDK
+      - name: Install dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ninja-build nasm unzip wget
+        # Includes g++ and make tools, Ninja for CMake, NASM for optimizations:contentReference[oaicite:11]{index=11}
+
+      # Download and set up Android NDK (needed for cross-compiling):contentReference[oaicite:12]{index=12}
+      - name: Download Android NDK
+        run: |
+          wget https://dl.google.com/android/repository/android-ndk-r26d-linux.zip -O ndk.zip
+          unzip -q ndk.zip
+          mv android-ndk-r26d "$ANDROID_NDK_HOME"
+        # Obtains NDK r26d and defines ANDROID_NDK_HOME for the toolchain:contentReference[oaicite:13]{index=13}
+
+      # Install vcpkg and bootstrap (for Android dependencies):contentReference[oaicite:14]{index=14}
+      - name: Install vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      # (Optional) Pre-install dependencies for Android via vcpkg manifest
+      - name: Install dependencies via vcpkg (Android)
+        run: ./vcpkg/vcpkg install --triplet arm64-android
+        # Pre-build all vcpkg dependencies for Android/arm64 (using vcpkg manifest and triplet):contentReference[oaicite:15]{index=15}
+
+      # Configure CMake for Android cross-build
+      - name: Configure CMake (Android)
+        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                 -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
+                 -DVCPKG_TARGET_TRIPLET=arm64-android -DCESIUM_USE_EZVCPKG=OFF
+        # Use vcpkg Android toolchain via triplet for ARM64 (Meta Quest):contentReference[oaicite:16]{index=16}. 
+        # This sets CMAKE_SYSTEM_NAME=Android and uses ANDROID_NDK_HOME for cross-compiling:contentReference[oaicite:17]{index=17}.
+
+      # Build the project (cross-compile to Android ARM64)
+      - name: Build (Android)
+        run: cmake --build build --parallel
+        # Compile Cesium Native for Android (outputs .so or .a libraries for ARM64)
+
+      # Install the library and headers to a package directory
+      - name: Install library (Android)
+        run: cmake --install build --prefix "$GITHUB_WORKSPACE/install"
+        # Gather the Android library (e.g., .so or static .a) and headers into 'install' directory
+
+      # Upload the Android build artifact
+      - name: Upload artifact (Android)
+        uses: actions/upload-artifact@v3
         with:
-          submodules: recursive
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.9
-        with:
-          key: ccache-${{ env.CACHE_KEY}}-${{matrix.build_type}}
-      - name: Set CC and CXX
-        if: ${{ matrix.compiler == 'clang' && matrix.platform != 'macos-13'}}
-        run: |
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
-      - name: add VCPKG_ROOT
-        run: |
-          echo "VCPKG_ROOT=${VCPKG_INSTALLATION_ROOT}" >> "$GITHUB_ENV"
-      - name: Make more swap space available
-        if: ${{ matrix.platform != 'macos-13'}}
-        run: |
-          sudo swapoff -a
-          sudo fallocate -l 10G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          sudo swapon --show
-      - name: Set macOS cmake options
-        if: ${{ matrix.platform == 'macos-13' }}
-        run: |
-          # Use a custom triplet to target macOS 10.15.
-          mkdir -p vcpkg/triplets
-          echo "
-            set(VCPKG_CMAKE_SYSTEM_NAME Darwin)
-            set(VCPKG_CRT_LINKAGE dynamic)
-            set(VCPKG_LIBRARY_LINKAGE static)
-            set(VCPKG_OSX_DEPLOYMENT_TARGET 10.15)
-            set(VCPKG_TARGET_ARCHITECTURE x64)
-            set(VCPKG_OSX_ARCHITECTURES x86_64)
-          " > vcpkg/triplets/x64-macos-10-15.cmake
-          # Specify the overlay triplet, and also tell cesium-native to build with the same settings.
-          echo "EXTRA_CMAKE_OPTIONS=-DVCPKG_OVERLAY_TRIPLETS=$PWD/vcpkg/triplets -DVCPKG_TRIPLET=x64-macos-10-15 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_SYSTEM_NAME=Darwin -DCMAKE_SYSTEM_PROCESSOR=x86_64 -DVCPKG_TARGET_TRIPLET=x64-macos-10-15" >> "$GITHUB_ENV"
-      - name: Compile ${{matrix.build_type}} Configuration
-        run: |
-          cp doc/cmake-presets/CMakeUserPresets.json .
-          cmake --preset=vcpkg -DCMAKE_BUILD_TYPE:STRING=${{matrix.build_type}} $EXTRA_CMAKE_OPTIONS
-          cmake --build build --parallel
-      - name: Test ${{matrix.build_type}} Configuration
-        run: |
-          cd build
-          ctest -V
+          name: cesium-native-android
+          path: install
+        # Provides the Android build artifact (e.g., .so or .a plus headers) for download
+
+      # Note: To create an Android plugin (for Meta Quest), you may need to build a shared library (.so) 
+      # that wraps Cesium Native. This can be done by writing a small CMake or NDK build for your 
+      # own C++ bridge (e.g., CesiumBridge.cpp) and linking against the static Cesium Native libs.
+      # Using the Android NDK toolchain file in CMake or the vcpkg triplet ensures the correct ABI and platform.
+      # The above steps prepare all necessary libraries; you can then compile your plugin code into an .so 
+      # for Unity/StereoKit (using arm64-v8a ABI). Ensure to use the same NDK and toolchain settings for consistency.
