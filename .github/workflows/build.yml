@@ -54,7 +54,7 @@ jobs:
 
       # Upload the built library as a GitHub Actions artifact
       - name: Upload artifact (macOS)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: cesium-native-macos
           path: install
@@ -115,7 +115,7 @@ jobs:
 
       # Upload the Windows build artifact (library + headers)
       - name: Upload artifact (Windows)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: cesium-native-windows
           path: install
@@ -179,7 +179,7 @@ jobs:
 
       # Upload the Android build artifact
       - name: Upload artifact (Android)
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: cesium-native-android
           path: install
