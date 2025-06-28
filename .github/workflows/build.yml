@@ -1,193 +1,98 @@
-name: Build Cesium Native (Cross-Platform)
+name: Cesium Native CI
 
-# Trigger on push, PR, and manual dispatch
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
-  # Job for macOS build
   build-macos:
-    name: Build on macOS (Cesium Native)
     runs-on: macos-latest
     env:
-      # Set vcpkg root path for CMake to find dependencies:contentReference[oaicite:0]{index=0}
-      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      # Set environment for Android NDK if needed (not used on macOS)
+      ANDROID_NDK_HOME: ""
     steps:
-      # Check out the repository code
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      # Install NASM and Ninja via Homebrew (for assembly optimizations & Ninja build):contentReference[oaicite:1]{index=1}
-      - name: Install build tools (Homebrew)
-        run: |
-          brew update
-          brew install nasm ninja
-        # NASM is needed for optimal JPEG decoding performance:contentReference[oaicite:2]{index=2}; Ninja is the chosen CMake generator
-
-      # Install vcpkg (dependency manager):contentReference[oaicite:3]{index=3}
-      - name: Install vcpkg
-        run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-        # Clone vcpkg and bootstrap it to manage Cesium Native dependencies:contentReference[oaicite:4]{index=4}
-
-      # Configure CMake for macOS build
-      - name: Configure CMake (macOS)
-        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                 -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
-                 -DCESIUM_USE_EZVCPKG=OFF
-        # Use Ninja generator and vcpkg toolchain:contentReference[oaicite:5]{index=5}; disable internal ezvcpkg to use our vcpkg install
-
-      # Build the project using Ninja
+      - uses: actions/checkout@v4
+        # Benutze neueste Checkout-Action (schneller & aktueller)
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+        # Holt neueste CMake-Version (lukka/get-cmake cached automatisch)
+      - name: Install NASM (macOS)
+        run: brew install nasm
+        # Installiert NASM via Homebrew, damit libjpeg-Turbo optimiert bauen kann :contentReference[oaicite:19]{index=19}
+      - name: Configure (macOS)
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+        # Beispielhafter CMake-Konfigurationsaufruf
       - name: Build (macOS)
-        run: cmake --build build --parallel
-        # Compile Cesium Native on macOS (Release configuration)
-
-      # Install the library and headers to a package directory
-      - name: Install library (macOS)
-        run: cmake --install build --prefix "$GITHUB_WORKSPACE/install"
-        # Using CMake install to gather built library (.dylib) and headers into 'install' folder
-
-      # Upload the built library as a GitHub Actions artifact
+        run: cmake --build build --target install
       - name: Upload artifact (macOS)
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v4
         with:
           name: cesium-native-macos
-          path: install
-        # Provides the macOS build artifact (e.g., .dylib and includes) for download
+          path: build/install/**
+        # Hochladen mit v4 (v3 deprecated):contentReference[oaicite:20]{index=20}; 'include-hidden-files: true' falls nötig
 
-  # Job for Windows build
   build-windows:
-    name: Build on Windows (Cesium Native)
     runs-on: windows-latest
     env:
-      # Set vcpkg root path (Windows requires backslashes in path)
-      VCPKG_ROOT: "${{ github.workspace }}\\vcpkg"
+      VCPKG_ROOT: 'C:\vcpkg'   # Beispiel für vcpkg Pfad
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      # Set up Visual C++ build environment (MSVC) for command-line use
-      - name: Setup MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-        # Activates the Developer Command Prompt (vcvars) for 64-bit MSVC tools
-
-      # Install NASM and Ninja via Chocolatey (for assembly optimization & Ninja):contentReference[oaicite:6]{index=6}
-      - name: Install build tools (Chocolatey)
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        # Setzt MSVC Developer Command Prompt (benötigt für cl.exe)
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+      - name: Install NASM (Windows)
+        shell: pwsh
         run: |
-          choco install -y nasm
-          choco install -y ninja
-        # NASM for optimized JPEG decoding on Windows:contentReference[oaicite:7]{index=7}; Ninja for faster multi-config builds
-
-      # Install vcpkg on Windows and bootstrap it:contentReference[oaicite:8]{index=8}
-      - name: Install vcpkg
+          choco install nasm -y
+          echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        # Installiert NASM via Chocolatey und fügt es dem PATH hinzu :contentReference[oaicite:21]{index=21}
+      - name: Configure (Windows)
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DVCPKG_ROOT="%VCPKG_ROOT%"
         shell: cmd
-        run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
-          vcpkg\bootstrap-vcpkg.bat -disableMetrics
-        # Clone and build vcpkg.exe (manages dependencies):contentReference[oaicite:9]{index=9}
-
-      # Configure CMake for Windows build
-      - name: Configure CMake (Windows)
-        shell: cmd
-        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release ^
-                   -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
-                   -DCESIUM_USE_EZVCPKG=OFF
-        # Generate Ninja build files with vcpkg toolchain:contentReference[oaicite:10]{index=10}; using MSVC compiler (via vcvars), NASM enabled
-
-      # Build the project with Ninja (using MSVC)
       - name: Build (Windows)
+        run: cmake --build build --config Release --target INSTALL
         shell: cmd
-        run: cmake --build build --parallel
-        # Compile Cesium Native on Windows (Release mode); results in .lib/.dll outputs
-
-      # Install the library and headers to a package directory
-      - name: Install library (Windows)
-        shell: cmd
-        run: cmake --install build --prefix "%GITHUB_WORKSPACE%\install"
-        # Collect the built library (.dll and .lib) and headers into 'install' directory
-
-      # Upload the Windows build artifact (library + headers)
       - name: Upload artifact (Windows)
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v4
         with:
           name: cesium-native-windows
-          path: install
-        # Provides the Windows build artifact (e.g., DLL and import LIB) for download
+          path: build\install\**
+        # Achtung: Backslashes im Pfad funktionieren, aber ggf. als String quoten.
+        # Upload mit v4 – jeder Job hat eindeutigen Artefakt-Namen (hier windows) :contentReference[oaicite:22]{index=22}
 
-  # Job for Android (cross-compile on Linux)
   build-android:
-    name: Build for Android (Cesium Native)
     runs-on: ubuntu-latest
-    env:
-      # Set vcpkg root path and Android NDK path for cross-compiling
-      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-      ANDROID_NDK_HOME: ${{ github.workspace }}/android-ndk
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      # Install required packages: compiler, Ninja, NASM, and tools to fetch NDK
-      - name: Install dependencies (Ubuntu)
+      - uses: actions/checkout@v4
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 33
+          ndk: false  # Wir installieren NDK separat
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+        # Lädt Android NDK r26d herunter und setzt ANDROID_NDK_HOME :contentReference[oaicite:23]{index=23}
+      - name: Install NASM (Ubuntu for Android)
+        run: sudo apt-get update && sudo apt-get install -y nasm
+        # Installiert NASM, damit z.B. libjpeg-turbo Assembly nutzen kann (auch beim Cross-Compile)
+      - name: Configure (Android)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential ninja-build nasm unzip wget
-        # Includes g++ and make tools, Ninja for CMake, NASM for optimizations:contentReference[oaicite:11]{index=11}
-
-      # Download and set up Android NDK (needed for cross-compiling):contentReference[oaicite:12]{index=12}
-      - name: Download Android NDK
-        run: |
-          wget https://dl.google.com/android/repository/android-ndk-r26d-linux.zip -O ndk.zip
-          unzip -q ndk.zip
-          mv android-ndk-r26d "$ANDROID_NDK_HOME"
-        # Obtains NDK r26d and defines ANDROID_NDK_HOME for the toolchain:contentReference[oaicite:13]{index=13}
-
-      # Install vcpkg and bootstrap (for Android dependencies):contentReference[oaicite:14]{index=14}
-      - name: Install vcpkg
-        run: |
-          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
-          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-
-      # (Optional) Pre-install dependencies for Android via vcpkg manifest
-      - name: Install dependencies via vcpkg (Android)
-        run: ./vcpkg/vcpkg install --triplet arm64-android
-        # Pre-build all vcpkg dependencies for Android/arm64 (using vcpkg manifest and triplet):contentReference[oaicite:15]{index=15}
-
-      # Configure CMake for Android cross-build
-      - name: Configure CMake (Android)
-        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                 -DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake \
-                 -DVCPKG_TARGET_TRIPLET=arm64-android -DCESIUM_USE_EZVCPKG=OFF
-        # Use vcpkg Android toolchain via triplet for ARM64 (Meta Quest):contentReference[oaicite:16]{index=16}. 
-        # This sets CMAKE_SYSTEM_NAME=Android and uses ANDROID_NDK_HOME for cross-compiling:contentReference[oaicite:17]{index=17}.
-
-      # Build the project (cross-compile to Android ARM64)
+          cmake -B build-android -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-33
       - name: Build (Android)
-        run: cmake --build build --parallel
-        # Compile Cesium Native for Android (outputs .so or .a libraries for ARM64)
-
-      # Install the library and headers to a package directory
-      - name: Install library (Android)
-        run: cmake --install build --prefix "$GITHUB_WORKSPACE/install"
-        # Gather the Android library (e.g., .so or static .a) and headers into 'install' directory
-
-      # Upload the Android build artifact
+        run: cmake --build build-android --target install
       - name: Upload artifact (Android)
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v4
         with:
           name: cesium-native-android
-          path: install
-        # Provides the Android build artifact (e.g., .so or .a plus headers) for download
-
-      # Note: To create an Android plugin (for Meta Quest), you may need to build a shared library (.so) 
-      # that wraps Cesium Native. This can be done by writing a small CMake or NDK build for your 
-      # own C++ bridge (e.g., CesiumBridge.cpp) and linking against the static Cesium Native libs.
-      # Using the Android NDK toolchain file in CMake or the vcpkg triplet ensures the correct ABI and platform.
-      # The above steps prepare all necessary libraries; you can then compile your plugin code into an .so 
-      # for Unity/StereoKit (using arm64-v8a ABI). Ensure to use the same NDK and toolchain settings for consistency.
+          path: build-android/install/**
+        # Artefakt für Android-Build hochladen (v4 verwendet)
